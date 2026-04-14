@@ -13,7 +13,7 @@ from utils.formatters import format_balance
 from utils.pot_event import track_chat_activity, check_pot_explosion
 from utils.box_utils import update_user_boxes, get_time_until_next_box
 from utils.inventory_helpers import add_item_to_inventory
-from utils.levels import format_level_line, add_xp
+from utils.levels import format_level_line, add_xp, grant_level_rewards
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -485,6 +485,7 @@ async def sell_execute(call: CallbackQuery) -> None:
             user.balance_vv += net
 
             # ── XP за продажу ──
+            old_level = user.level
             new_levels = add_xp(user, net)
 
             if sell_qty >= inv.quantity:
@@ -492,6 +493,8 @@ async def sell_execute(call: CallbackQuery) -> None:
             else:
                 inv.quantity -= sell_qty
             await session.commit()
+            if new_levels:
+                await grant_level_rewards(call.bot, session, user, old_level, new_levels)
 
             tax_text = f"\n💸 Налог (5%): <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             lvl_text = _build_lvl_text(new_levels)
@@ -576,10 +579,13 @@ async def sellall_confirm(call: CallbackQuery) -> None:
             user.balance_vv += net
 
             # ── XP за продажу ──
+            old_level = user.level
             new_levels = add_xp(user, net)
 
             await session.delete(inv)
             await session.commit()
+            if new_levels:
+                await grant_level_rewards(call.bot, session, user, old_level, new_levels)
 
             tax_text = f"\n💸 Налог: <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             lvl_text = _build_lvl_text(new_levels)
@@ -632,9 +638,12 @@ async def sellall_everything(call: CallbackQuery) -> None:
             user.balance_vv += net
 
             # ── XP за продажу ──
+            old_level = user.level
             new_levels = add_xp(user, net)
 
             await session.commit()
+            if new_levels:
+                await grant_level_rewards(call.bot, session, user, old_level, new_levels)
 
             tax_text = f"\n💸 Налог: <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             sold_text = "\n".join(sold_lines[:10])
