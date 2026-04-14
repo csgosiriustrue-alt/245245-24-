@@ -470,6 +470,11 @@ async def sell_execute(call: CallbackQuery) -> None:
             if not user or not inv:
                 await call.answer("❌!", show_alert=True)
                 return
+            if user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
             if inv.item.name in TOOL_NAMES:
                 await call.answer("❌ Инструменты нельзя продать!", show_alert=True)
                 return
@@ -563,6 +568,11 @@ async def sellall_confirm(call: CallbackQuery) -> None:
             if not user or not inv or inv.quantity <= 0:
                 await call.answer("❌!", show_alert=True)
                 return
+            if user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
             if inv.item.name in TOOL_NAMES:
                 await call.answer("❌ Инструменты нельзя продать!", show_alert=True)
                 return
@@ -610,6 +620,11 @@ async def sellall_everything(call: CallbackQuery) -> None:
             user = user_r.scalar_one_or_none()
             if not user:
                 await call.answer("❌", show_alert=True)
+                return
+            if user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
                 return
             inv_r = await session.execute(select(Inventory).where(Inventory.user_id == user_id))
             inv_items = inv_r.scalars().all()
