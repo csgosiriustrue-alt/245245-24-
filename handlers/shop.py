@@ -411,6 +411,12 @@ async def shop_buy_coins(call: CallbackQuery) -> None:
                 await call.answer("❌", show_alert=True)
                 return
 
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
+
             # ── Блокируем Stars-only предметы ──
             if item.name in STARS_ONLY_ITEMS:
                 await call.answer("❌ Только за ⭐ Stars!", show_alert=True)
@@ -532,6 +538,12 @@ async def shop_send_invoice(call: CallbackQuery) -> None:
 
             user_r = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_r.scalar_one_or_none()
+
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
 
             is_charge = (item.name == CHARGE_ITEM_NAME)
 
@@ -871,6 +883,11 @@ async def bm_buy(call: CallbackQuery) -> None:
             if not user or not item:
                 await call.answer("❌", show_alert=True)
                 return
+            if user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
             if not user.black_market_until or user.black_market_until <= datetime.utcnow():
                 await call.answer("❌ Закрылся!", show_alert=True)
                 return
@@ -934,6 +951,11 @@ async def bm_buy_charges(call: CallbackQuery) -> None:
             user = user_r.scalar_one_or_none()
             if not user:
                 await call.answer("❌", show_alert=True)
+                return
+            if user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
                 return
             if not user.black_market_until or user.black_market_until <= datetime.utcnow():
                 await call.answer("❌ Закрылся!", show_alert=True)

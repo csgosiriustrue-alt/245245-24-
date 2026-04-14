@@ -200,6 +200,18 @@ async def transfer_inline_handler(inline_query: InlineQuery) -> None:
         await inline_query.bot.answer_inline_query(inline_query.id, [r], cache_time=1, is_personal=True)
         return
 
+    if sender.is_being_robbed:
+        r = InlineQueryResultArticle(
+            id="transfer_frozen",
+            title="⛔ Финансы заморожены!",
+            description="Вас грабят — переводы заблокированы",
+            input_message_content=InputTextMessageContent(
+                message_text="⛔ <b>Вы не можете распоряжаться финансами, пока вас грабят!</b>",
+                parse_mode="HTML"))
+        await inline_query.bot.answer_inline_query(
+            inline_query.id, [r], cache_time=1, is_personal=True)
+        return
+
     # ═══ ПРОВЕРКА УРОВНЯ ═══
     can_do, block_msg = can_transfer(sender)
     if not can_do:
@@ -318,6 +330,12 @@ async def transfer_confirm_handler(call: CallbackQuery) -> None:
 
             if not sender or not recipient:
                 await call.answer("❌ Игрок не найден!", show_alert=True)
+                return
+
+            if sender and sender.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
                 return
 
             # ═══ ПРОВЕРКА УРОВНЯ ═══

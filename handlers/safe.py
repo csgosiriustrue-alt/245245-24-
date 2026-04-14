@@ -533,6 +533,12 @@ async def safe_take_item_list(call: CallbackQuery) -> None:
             user_result = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_result.scalar_one_or_none()
 
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
+
             if not user or not user.hidden_item_ids:
                 await call.answer("❌ Сейф пуст!", show_alert=True)
                 return
@@ -585,6 +591,12 @@ async def safe_retrieve_item(call: CallbackQuery) -> None:
         try:
             user_result = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_result.scalar_one_or_none()
+
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
 
             success, msg = await take_item_from_safe(session, user, item_id)
             if success:
@@ -788,6 +800,12 @@ async def safe_take_coins_menu(call: CallbackQuery, state: FSMContext) -> None:
             user_result = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_result.scalar_one_or_none()
 
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
+
             if not user or user.hidden_coins <= 0:
                 await call.answer("❌ В сейфе нет монет!", show_alert=True)
                 return
@@ -875,6 +893,12 @@ async def safe_withdraw_manual_input(message: Message, state: FSMContext) -> Non
             user_result = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_result.scalar_one_or_none()
 
+            if user and user.is_being_robbed:
+                await message.answer(
+                    "⛔ <b>Вы не можете распоряжаться финансами, пока вас грабят!</b>",
+                    parse_mode="HTML", reply_markup=get_main_keyboard())
+                return
+
             if not user or not user.has_active_safe():
                 await message.answer("❌ Нет сейфа!", reply_markup=get_main_keyboard())
                 return
@@ -918,6 +942,12 @@ async def safe_withdraw_coins(call: CallbackQuery) -> None:
         try:
             user_result = await session.execute(select(User).where(User.tg_id == user_id))
             user = user_result.scalar_one_or_none()
+
+            if user and user.is_being_robbed:
+                await call.answer(
+                    "⛔ Вы не можете распоряжаться финансами, пока вас грабят!",
+                    show_alert=True)
+                return
 
             success, msg = await take_coins_from_safe(session, user, amount)
             if success:
