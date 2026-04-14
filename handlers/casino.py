@@ -197,6 +197,7 @@ async def _play_casino(bot, user_id, user_first_name, chat_id, bet, reply_to_mes
                 await session2.commit()
                 if new_levels:
                     await grant_level_rewards(bot, session2, user2, old_level, new_levels)
+                    await session2.commit()
                 if group2:
                     await session2.refresh(group2)
                 pd = group2.common_pot if group2 else 0
@@ -501,6 +502,7 @@ async def _play_casino_inline(bot, user_id, user_first_name, chat_id, bet, inlin
                 await session2.commit()
                 if new_levels:
                     await grant_level_rewards(bot, session2, user2, old_level, new_levels)
+                    await session2.commit()
                 if group2:
                     await session2.refresh(group2)
                 pd = group2.common_pot if group2 else 0

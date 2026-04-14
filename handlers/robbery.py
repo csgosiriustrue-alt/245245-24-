@@ -1057,6 +1057,7 @@ async def rob_wallet_execute(call: CallbackQuery) -> None:
                     await session.commit()
                     if new_levels:
                         await grant_level_rewards(call.bot, session, robber, old_level, new_levels)
+                        await session.commit()
 
                     gloves_text = "\n🧤 Перчатки использованы!" if hg else ""
                     lvl_text = _build_lvl_text(new_levels)
@@ -1353,6 +1354,7 @@ async def rob_gene_execute(call: CallbackQuery) -> None:
                     _cleanup_session(iid, rid, vid)
                     if new_levels:
                         await grant_level_rewards(call.bot, session, robber, old_level, new_levels)
+                        await session.commit()
 
                     gloves_text = "\n🧤 Перчатки использованы!" if hg else ""
                     lvl_text = _build_lvl_text(new_levels)
@@ -1573,6 +1575,7 @@ async def rob_crowbar(call: CallbackQuery) -> None:
                     _cleanup_session(iid, rid, vid)
                     if loot_rob and loot_new_levels:
                         await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
+                        await session.commit()
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
                         text=(
@@ -1789,6 +1792,7 @@ async def safe_submit(call: CallbackQuery) -> None:
                     _cleanup_session(iid, rid, vid)
                     if loot_rob and loot_new_levels:
                         await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
+                        await session.commit()
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
                         text=(

@@ -513,6 +513,7 @@ async def sell_execute(call: CallbackQuery) -> None:
             await session.commit()
             if new_levels:
                 await grant_level_rewards(call.bot, session, user, old_level, new_levels)
+                await session.commit()
 
             tax_text = f"\n💸 Налог (5%): <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             lvl_text = _build_lvl_text(new_levels)
@@ -609,6 +610,7 @@ async def sellall_confirm(call: CallbackQuery) -> None:
             await session.commit()
             if new_levels:
                 await grant_level_rewards(call.bot, session, user, old_level, new_levels)
+                await session.commit()
 
             tax_text = f"\n💸 Налог: <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             lvl_text = _build_lvl_text(new_levels)
@@ -672,6 +674,7 @@ async def sellall_everything(call: CallbackQuery) -> None:
             await session.commit()
             if new_levels:
                 await grant_level_rewards(call.bot, session, user, old_level, new_levels)
+                await session.commit()
 
             tax_text = f"\n💸 Налог: <b>-{tax:,} 🪙</b>" if tax > 0 else ""
             sold_text = "\n".join(sold_lines[:10])
