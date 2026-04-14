@@ -20,7 +20,7 @@ from utils.inventory_helpers import (
     HAZBIK_DURATION_MINUTES,
 )
 from utils.pot_event import track_chat_activity, check_pot_explosion
-from utils.levels import add_xp
+from utils.levels import add_xp, grant_level_rewards
 from handlers.user import use_lawyer
 
 logger = logging.getLogger(__name__)
@@ -1004,9 +1004,12 @@ async def rob_wallet_execute(call: CallbackQuery) -> None:
                     actual = min(target_amount, victim.balance_vv)
                     victim.balance_vv -= actual
                     robber.balance_vv += actual
+                    old_level = robber.level
                     new_levels = add_xp(robber, actual)
                     apply_hazbik_protection(victim)
                     await session.commit()
+                    if new_levels:
+                        await grant_level_rewards(call.bot, session, robber, old_level, new_levels)
 
                     gloves_text = "\n🧤 Перчатки использованы!" if hg else ""
                     lvl_text = _build_lvl_text(new_levels)
@@ -1284,10 +1287,13 @@ async def rob_gene_execute(call: CallbackQuery) -> None:
 
                     await add_item_to_inventory(session, rid, item_id, 1)
 
+                    old_level = robber.level
                     new_levels = add_xp(robber, item.price)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
+                    if new_levels:
+                        await grant_level_rewards(call.bot, session, robber, old_level, new_levels)
 
                     gloves_text = "\n🧤 Перчатки использованы!" if hg else ""
                     lvl_text = _build_lvl_text(new_levels)
@@ -1474,10 +1480,12 @@ async def rob_crowbar(call: CallbackQuery) -> None:
 
                 if success:
                     _failed_crowbar_attempts = 0
-                    loot = await _loot_safe(session, rid, victim)
+                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
+                    if loot_rob and loot_new_levels:
+                        await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
                         text=(
@@ -1687,10 +1695,12 @@ async def safe_submit(call: CallbackQuery) -> None:
                     return
 
                 if guess == code:
-                    loot = await _loot_safe(session, rid, victim)
+                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
+                    if loot_rob and loot_new_levels:
+                        await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
                         text=f"🔓 <b>ВСКРЫТ!</b> ✅\n\nКод <code>{code}</code>\n\n{loot}",
@@ -1928,6 +1938,9 @@ async def safe_giveup(call: CallbackQuery) -> None:
 
 async def _loot_safe(session, robber_id, victim):
     lines = []
+    rob = None
+    old_level = -1  # -1 означает «не инициализировано»
+    new_levels: list[int] = []
 
     if victim.hidden_item_ids:
         for iid in list(victim.hidden_item_ids):
@@ -1947,7 +1960,8 @@ async def _loot_safe(session, robber_id, victim):
         rob = rr.scalar_one_or_none()
         if rob and stolen > 0:
             rob.balance_vv += stolen
-            add_xp(rob, stolen)
+            old_level = rob.level
+            new_levels = add_xp(rob, stolen)
             lines.append(f"💰 {stolen:,}🪙 (25%)")
         if returned > 0:
             victim.balance_vv += returned
@@ -1957,7 +1971,8 @@ async def _loot_safe(session, robber_id, victim):
     destroy_safe(victim)
     _safe_fail_tracker.pop(victim.tg_id, None)
 
-    return "<b>Добыча:</b>\n" + "\n".join(f"  • {l}" for l in lines) if lines else "<b>Добыча:</b>\n  <i>Пуст!</i>"
+    loot_text = "<b>Добыча:</b>\n" + "\n".join(f"  • {l}" for l in lines) if lines else "<b>Добыча:</b>\n  <i>Пуст!</i>"
+    return loot_text, rob, old_level, new_levels
 
 
 # ============================================================================

@@ -17,7 +17,7 @@ from models import User, GroupChat, MAX_DAILY_BETS
 from utils.casino_utils import calculate_winnings, MIN_BET, MAX_COMMON_POT, POT_PERCENT
 from utils.keyboards import get_casino_keyboard
 from utils.pot_event import track_chat_activity, check_pot_explosion, POT_EXPLOSION_THRESHOLD
-from utils.levels import add_xp
+from utils.levels import add_xp, grant_level_rewards
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -188,12 +188,15 @@ async def _play_casino(bot, user_id, user_first_name, chat_id, bet, reply_to_mes
                 user2.balance_vv += gross
 
                 # ── XP за выигрыш в казино ──
+                old_level = user2.level
                 new_levels = add_xp(user2, gross)
                 lvl_text = _build_lvl_text(new_levels)
 
                 if group2 and multiplier == 20:
                     group2.common_pot = max(0, group2.common_pot - int(common_pot_before * 0.10))
                 await session2.commit()
+                if new_levels:
+                    await grant_level_rewards(bot, session2, user2, old_level, new_levels)
                 if group2:
                     await session2.refresh(group2)
                 pd = group2.common_pot if group2 else 0
@@ -489,12 +492,15 @@ async def _play_casino_inline(bot, user_id, user_first_name, chat_id, bet, inlin
                 user2.balance_vv += gross
 
                 # ── XP за выигрыш в казино ──
+                old_level = user2.level
                 new_levels = add_xp(user2, gross)
                 lvl_text = _build_lvl_text(new_levels)
 
                 if group2 and multiplier == 20:
                     group2.common_pot = max(0, group2.common_pot - int(common_pot_before * 0.10))
                 await session2.commit()
+                if new_levels:
+                    await grant_level_rewards(bot, session2, user2, old_level, new_levels)
                 if group2:
                     await session2.refresh(group2)
                 pd = group2.common_pot if group2 else 0
