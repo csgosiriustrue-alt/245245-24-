@@ -63,6 +63,41 @@ _pending_robberies: dict[str, dict] = {}
 _safe_fail_tracker: dict[int, set] = {}
 _failed_crowbar_attempts: int = 0
 
+
+def calculate_rob_chance(attacker_money: int, victim_money: int, base_chance: float) -> float:
+    """
+    Рассчитывает динамический шанс ограбления.
+    - Если victim_money >= attacker_money * 0.6 → возвращает base_chance (без изменений).
+    - Иначе → base_chance * (victim_money / (attacker_money * 0.6)).
+    - Минимальный порог: 1% (шанс никогда не падает ниже 1.0).
+    """
+    threshold = attacker_money * 0.6
+    if victim_money >= threshold:
+        return base_chance
+    if threshold == 0:
+        return max(1.0, base_chance)
+    reduced = base_chance * (victim_money / threshold)
+    return max(1.0, reduced)
+
+
+def calculate_loot_percent(attacker_total: int, victim_total: int) -> float:
+    """
+    Рассчитывает процент добычи из сейфа.
+    max_loot = 0.25 (25%)
+    threshold = attacker_total * 0.6
+    Если victim_total >= threshold → loot_percent = max_loot
+    Иначе → loot_percent = max_loot * (victim_total / threshold)
+    Минимум: 0.01 (1%)
+    """
+    max_loot = 0.25
+    threshold = attacker_total * 0.6
+    if threshold == 0:
+        return max_loot
+    if victim_total >= threshold:
+        return max_loot
+    result = max_loot * (victim_total / threshold)
+    return max(0.01, result)
+
 _inactivity_timers: dict[str, asyncio.Task] = {}
 
 _bot_ref: Bot | None = None
@@ -858,6 +893,15 @@ async def rob_wallet_percent(call: CallbackQuery) -> None:
             btns.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rob_start_{rid}_{vid}")])
             btns.append([InlineKeyboardButton(text="❌ Отмена", callback_data=f"rob_cancel_{rid}_{vid}")])
 
+            small_target_warning = ""
+            sample_chance = calculate_rob_chance(robber.balance_vv, victim.balance_vv, MAX_CHANCE_MONEY)
+            if sample_chance < MAX_CHANCE_MONEY:
+                small_target_warning = (
+                    f"\n⚠️ <b>Цель слишком мелкая для тебя!</b> Из-за разницы в весовых категориях "
+                    f"твой шанс на успех снижен до <b>{sample_chance:.1f}%</b>, "
+                    f"но залог за провал остается прежним.\n"
+                )
+
             await _safe_edit_text(
                 call.bot, inline_message_id=iid,
                 text=(
@@ -866,7 +910,8 @@ async def rob_wallet_percent(call: CallbackQuery) -> None:
                     f"💰 <b>Доступный залог: {robber_total:,} 🪙</b> <i>(включая сейф)</i>\n\n"
                     f"⚠️ Залог — <b>только наличные + сейф</b>\n"
                     f"✅ При успехе залог не списывается\n"
-                    f"❌ При провале — сначала с баланса, потом из сейфа\n\n"
+                    f"❌ При провале — сначала с баланса, потом из сейфа\n"
+                    f"{small_target_warning}\n"
                     f"Выбери размер куша 👇"
                 ),
                 parse_mode="HTML",
@@ -996,9 +1041,11 @@ async def rob_wallet_execute(call: CallbackQuery) -> None:
                     ch = min(MAX_CHANCE_MONEY, ch * GLOVES_MULTIPLIER)
                     await _consume_item(session, rid, ITEM_GLOVES)
 
+                current_chance = calculate_rob_chance(robber.balance_vv, victim.balance_vv, ch)
+
                 robber.increment_action()
                 roll = random.uniform(0, 100)
-                ok = roll <= ch
+                ok = roll <= current_chance
 
                 if ok:
                     actual = min(target_amount, victim.balance_vv)
@@ -1019,7 +1066,7 @@ async def rob_wallet_execute(call: CallbackQuery) -> None:
                         f"💰 Куш: <b>{actual:,} 🪙</b> ({pct}%)\n"
                         f"✅ Залог: <b>{bail_amount:,} 🪙</b> (не списан)"
                         f"{gloves_text}\n\n"
-                        f"🎲 {roll:.1f} / ≤{ch:.1f}"
+                        f"🎲 {roll:.1f} / ≤{current_chance:.1f}"
                         f"{lvl_text}"
                     )
                     await _safe_edit_text(
@@ -1059,7 +1106,7 @@ async def rob_wallet_execute(call: CallbackQuery) -> None:
                         f"💰 Компенсация {v_name}: <b>+{comp:,} 🪙</b>\n"
                         f"🔒 Тюрьма: {JAIL_DURATION_MINUTES}мин"
                         f"{pt}{gloves_text}{penalty_text}\n\n"
-                        f"🎲 {roll:.1f} / ≤{ch:.1f}"
+                        f"🎲 {roll:.1f} / ≤{current_chance:.1f}"
                         f"{lawyer_hint}"
                     )
 
@@ -1143,15 +1190,25 @@ async def rob_genes_list(call: CallbackQuery) -> None:
             if robber.hidden_coins and robber.hidden_coins > 0:
                 safe_note = f"\n🔐 В сейфе: <b>{robber.hidden_coins:,} 🪙</b>"
 
+            gene_current_chance = calculate_rob_chance(robber.balance_vv, victim.balance_vv, GENE_STEAL_CHANCE)
+            small_target_warning = ""
+            if gene_current_chance < GENE_STEAL_CHANCE:
+                small_target_warning = (
+                    f"\n⚠️ <b>Цель слишком мелкая для тебя!</b> Из-за разницы в весовых категориях "
+                    f"твой шанс на успех снижен до <b>{gene_current_chance:.1f}%</b>, "
+                    f"но залог за провал остается прежним.\n"
+                )
+
             await _safe_edit_text(
                 call.bot, inline_message_id=iid,
                 text=(
                     f"🧬 <b>Инвентарь {v_name}</b>\n\n"
                     f"💼 Наличные: <b>{robber.balance_vv:,} 🪙</b>{safe_note}\n"
                     f"💰 Доступный залог: <b>{robber_total:,} 🪙</b>\n\n"
-                    f"🎯 Шанс кражи: <b>{GENE_STEAL_CHANCE:.0f}%</b>\n"
+                    f"🎯 Шанс кражи: <b>{gene_current_chance:.1f}%</b>\n"
                     f"⚠️ Залог = 50% цены гена\n"
-                    f"❌ Провал = тюрьма {JAIL_DURATION_MINUTES}мин + залог списан\n\n"
+                    f"❌ Провал = тюрьма {JAIL_DURATION_MINUTES}мин + залог списан\n"
+                    f"{small_target_warning}\n"
                     f"Выбери ген 👇"
                 ),
                 parse_mode="HTML",
@@ -1275,9 +1332,11 @@ async def rob_gene_execute(call: CallbackQuery) -> None:
                     chance = min(MAX_CHANCE_MONEY, chance * GENE_GLOVES_BONUS)
                     await _consume_item(session, rid, ITEM_GLOVES)
 
+                current_chance = calculate_rob_chance(robber.balance_vv, victim.balance_vv, chance)
+
                 robber.increment_action()
                 roll = random.uniform(0, 100)
-                ok = roll <= chance
+                ok = roll <= current_chance
 
                 if ok:
                     if victim_inv.quantity <= 1:
@@ -1306,7 +1365,7 @@ async def rob_gene_execute(call: CallbackQuery) -> None:
                             f"  • 🧬 <b>{item.name}</b> ({item.price:,} 🪙)\n\n"
                             f"✅ Залог: <b>{bail_amount:,} 🪙</b> (не списан)"
                             f"{gloves_text}\n\n"
-                            f"🎲 {roll:.1f} / ≤{chance:.1f}"
+                            f"🎲 {roll:.1f} / ≤{current_chance:.1f}"
                             f"{lvl_text}"
                         ),
                         parse_mode="HTML")
@@ -1349,7 +1408,7 @@ async def rob_gene_execute(call: CallbackQuery) -> None:
                             f"💰 Компенсация {v_name}: <b>+{comp:,} 🪙</b>\n"
                             f"🔒 Тюрьма: {JAIL_DURATION_MINUTES}мин"
                             f"{pt}{gloves_text}\n\n"
-                            f"🎲 {roll:.1f} / ≤{chance:.1f}"
+                            f"🎲 {roll:.1f} / ≤{current_chance:.1f}"
                             f"{lawyer_hint}"
                         ),
                         parse_mode="HTML",
@@ -1389,6 +1448,10 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
             victim = vr.scalar_one_or_none()
             if not victim or not victim.has_active_safe():
                 return
+            rr = await session.execute(select(User).where(User.tg_id == rid))
+            robber = rr.scalar_one_or_none()
+            if not robber:
+                return
             v_name = _display_name(victim)
             se = "🏦" if victim.safe_type == "elite" else "🧰"
             sn = "Элитный" if victim.safe_type == "elite" else "Ржавый"
@@ -1399,6 +1462,10 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
             else:
                 durability_line = f"❤️ Прочность: <b>{victim.safe_health}/3</b> | ⭐ ур.{level}"
 
+            attacker_total = robber.balance_vv + (robber.hidden_coins or 0)
+            victim_total = victim.balance_vv + (victim.hidden_coins or 0)
+            loot_percent = calculate_loot_percent(attacker_total, victim_total)
+
             ht = ""
             if victim.hidden_item_ids:
                 for hid in victim.hidden_item_ids:
@@ -1407,14 +1474,29 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
                     if io:
                         ht += f"  • 🧬 {io.name} ({io.price:,} 🪙)\n"
             if victim.hidden_coins and victim.hidden_coins > 0:
-                ht += f"  • 💰 {victim.hidden_coins:,} 🪙 (заберёте 25%)\n"
+                ht += f"  • 💰 {victim.hidden_coins:,} 🪙 (заберёте ~{loot_percent * 100:.0f}%)\n"
             if not ht:
                 ht = "  <i>Пуст</i>"
+
+            crowbar_chance = calculate_rob_chance(
+                robber.balance_vv, victim.balance_vv, CROWBAR_SUCCESS_CHANCE * 100
+            )
+
+            small_target_warning = ""
+            if crowbar_chance < CROWBAR_SUCCESS_CHANCE * 100:
+                small_target_warning = (
+                    f"\n⚠️ <b>Цель слишком мелкая для тебя!</b> Из-за разницы в весовых категориях "
+                    f"твой шанс на успех снижен до <b>{crowbar_chance:.1f}%</b>, "
+                    f"но залог за провал остается прежним.\n"
+                )
+
             btns = [[InlineKeyboardButton(text="🔓 Взломать код", callback_data=f"rob_safe_{rid}_{vid}")]]
             ri_r = await session.execute(select(Inventory).where(Inventory.user_id == rid))
             ri = ri_r.scalars().all()
             if victim.safe_type == "rusty" and _has_item(ri, ITEM_CROWBAR):
-                btns.append([InlineKeyboardButton(text="🔨 Лом (70%)", callback_data=f"rob_crowbar_{rid}_{vid}")])
+                btns.append([InlineKeyboardButton(
+                    text=f"🔨 Лом ({crowbar_chance:.0f}%)",
+                    callback_data=f"rob_crowbar_{rid}_{vid}")])
             btns.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rob_start_{rid}_{vid}")])
             btns.append([InlineKeyboardButton(text="❌ Отмена", callback_data=f"rob_cancel_{rid}_{vid}")])
             await _safe_edit_text(
@@ -1422,6 +1504,8 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
                 text=(f"🔍 <b>{v_name}</b>\n\n"
                       f"{se} <b>{sn}</b> {durability_line}\n\n"
                       f"<b>В сейфе:</b>\n{ht}\n"
+                      f"📈 <i>Ожидаемая добыча: ~{loot_percent * 100:.0f}%</i>\n"
+                      f"{small_target_warning}\n"
                       f"⚠️ <i>Провал = тюрьма {JAIL_SAFE_FAIL_MINUTES}мин</i>"),
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
@@ -1471,7 +1555,10 @@ async def rob_crowbar(call: CallbackQuery) -> None:
                 if not await _consume_item(session, rid, ITEM_CROWBAR):
                     return
 
-                success = random.random() <= CROWBAR_SUCCESS_CHANCE
+                crowbar_current_chance = calculate_rob_chance(
+                    robber.balance_vv, victim.balance_vv, CROWBAR_SUCCESS_CHANCE * 100
+                )
+                success = random.random() <= crowbar_current_chance / 100
                 if not success:
                     _failed_crowbar_attempts += 1
                     if _failed_crowbar_attempts % 3 == 0:
@@ -1480,7 +1567,7 @@ async def rob_crowbar(call: CallbackQuery) -> None:
 
                 if success:
                     _failed_crowbar_attempts = 0
-                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
+                    loot, loot_rob, loot_old_level, loot_new_levels, loot_percent = await _loot_safe(session, rid, victim)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
@@ -1489,7 +1576,8 @@ async def rob_crowbar(call: CallbackQuery) -> None:
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
                         text=(
-                            f"🔨💥 <b>ВСКРЫТ ЛОМОМ!</b> ✅\n\n"
+                            f"🔨💥 <b>Сейф вскрыт!</b> Учитывая ваш статус и обороты жертвы, вы смогли вынести "
+                            f"<b>{loot_percent * 100:.0f}%</b> содержимого. ✅\n\n"
                             f"Ржавый сейф не выдержал удара!\n"
                             f"🔨 Лом сломался после использования.\n\n"
                             f"{loot}"
@@ -1695,7 +1783,7 @@ async def safe_submit(call: CallbackQuery) -> None:
                     return
 
                 if guess == code:
-                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
+                    loot, loot_rob, loot_old_level, loot_new_levels, loot_percent = await _loot_safe(session, rid, victim)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
@@ -1703,7 +1791,11 @@ async def safe_submit(call: CallbackQuery) -> None:
                         await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
-                        text=f"🔓 <b>ВСКРЫТ!</b> ✅\n\nКод <code>{code}</code>\n\n{loot}",
+                        text=(
+                            f"🔓 <b>Сейф вскрыт!</b> Учитывая ваш статус и обороты жертвы, вы смогли вынести "
+                            f"<b>{loot_percent * 100:.0f}%</b> содержимого. ✅\n\n"
+                            f"Код <code>{code}</code>\n\n{loot}"
+                        ),
                         parse_mode="HTML")
                     return
 
@@ -1941,6 +2033,7 @@ async def _loot_safe(session, robber_id, victim):
     rob = None
     old_level = -1  # -1 означает «не инициализировано»
     new_levels: list[int] = []
+    loot_percent = SAFE_LOOT_COIN_PERCENT  # default fallback
 
     if victim.hidden_item_ids:
         for iid in list(victim.hidden_item_ids):
@@ -1954,25 +2047,28 @@ async def _loot_safe(session, robber_id, victim):
         victim.hidden_item_ids = []
 
     if victim.hidden_coins and victim.hidden_coins > 0:
-        stolen = int(victim.hidden_coins * SAFE_LOOT_COIN_PERCENT)
-        returned = victim.hidden_coins - stolen
         rr = await session.execute(select(User).where(User.tg_id == robber_id))
         rob = rr.scalar_one_or_none()
+        attacker_total = (rob.balance_vv + (rob.hidden_coins or 0)) if rob else 0
+        victim_total = victim.balance_vv + (victim.hidden_coins or 0)
+        loot_percent = calculate_loot_percent(attacker_total, victim_total)
+        stolen = int(victim.hidden_coins * loot_percent)
+        returned = victim.hidden_coins - stolen
         if rob and stolen > 0:
             rob.balance_vv += stolen
             old_level = rob.level
             new_levels = add_xp(rob, stolen)
-            lines.append(f"💰 {stolen:,}🪙 (25%)")
+            lines.append(f"💰 {stolen:,}🪙 ({loot_percent * 100:.0f}%)")
         if returned > 0:
             victim.balance_vv += returned
-            lines.append(f"↩️ {returned:,}🪙 возвращено владельцу (75%)")
+            lines.append(f"↩️ {returned:,}🪙 возвращено владельцу ({100 - loot_percent * 100:.0f}%)")
         victim.hidden_coins = 0
 
     destroy_safe(victim)
     _safe_fail_tracker.pop(victim.tg_id, None)
 
     loot_text = "<b>Добыча:</b>\n" + "\n".join(f"  • {l}" for l in lines) if lines else "<b>Добыча:</b>\n  <i>Пуст!</i>"
-    return loot_text, rob, old_level, new_levels
+    return loot_text, rob, old_level, new_levels, loot_percent
 
 
 # ============================================================================
