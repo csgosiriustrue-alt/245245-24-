@@ -2049,7 +2049,7 @@ async def _loot_safe(session, robber_id, victim):
     if victim.hidden_coins and victim.hidden_coins > 0:
         rr = await session.execute(select(User).where(User.tg_id == robber_id))
         rob = rr.scalar_one_or_none()
-        attacker_total = (rob.balance_vv if rob else 0) + ((rob.hidden_coins or 0) if rob else 0)
+        attacker_total = (rob.balance_vv + (rob.hidden_coins or 0)) if rob else 0
         victim_total = victim.balance_vv + (victim.hidden_coins or 0)
         loot_percent = calculate_loot_percent(attacker_total, victim_total)
         stolen = int(victim.hidden_coins * loot_percent)
