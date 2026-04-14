@@ -6,8 +6,8 @@ from aiogram.filters import Command
 from sqlalchemy import select
 
 from database import get_db
-from models import User, Item
-from utils.inventory_helpers import add_item_to_inventory
+from models import User, Item, MAX_BOX_COUNT
+from utils.inventory_helpers import add_item_to_inventory, activate_safe, activate_boost, activate_security, activate_roof
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -16,6 +16,38 @@ router = Router()
 ADMIN_IDS: set[int] = {
     1969951556,    # замени на свой Telegram ID
 }
+
+SAFE_ITEM_NAMES = {"Ржавый Сейф", "Элитный Сейф"}
+BOOST_ITEM_NAMES = {"Журнал для взрослых", "Резиновая кукла", "Путана"}
+CHARGE_ITEM_NAME = "Заряд теребления"
+
+
+def _is_activatable(item_name: str) -> bool:
+    return (item_name in SAFE_ITEM_NAMES or item_name in BOOST_ITEM_NAMES
+            or item_name in {"Охрана", "Крыша"} or item_name == CHARGE_ITEM_NAME)
+
+
+async def _admin_handle_activation(session, user, item, qty=1):
+    """Обрабатывает активируемые предметы (сейфы, бусты, защита, заряды)."""
+    if item.name == "Ржавый Сейф":
+        await activate_safe(session, user, "rusty")
+        return "🧰 Ржавый сейф активирован!"
+    elif item.name == "Элитный Сейф":
+        await activate_safe(session, user, "elite")
+        return "🏦 Элитный сейф активирован!"
+    elif item.name == "Охрана":
+        ok, msg = await activate_security(session, user)
+        return msg
+    elif item.name == "Крыша":
+        ok, msg = await activate_roof(session, user)
+        return msg
+    elif item.name in BOOST_ITEM_NAMES:
+        ok, msg = await activate_boost(session, user, item.name)
+        return msg
+    elif item.name == CHARGE_ITEM_NAME:
+        user.box_count = min(MAX_BOX_COUNT, user.box_count + qty)
+        return f"⚡ +{qty} заряд(ов)! Теперь: {user.box_count}/{MAX_BOX_COUNT}"
+    return None
 
 
 def is_admin(user_id: int) -> bool:
@@ -168,24 +200,36 @@ async def ashop_buy(call: CallbackQuery) -> None:
                 await call.answer("❌ Предмет не найден!", show_alert=True)
                 return
 
-            # Добавляем без проверки лимитов
-            ok, msg = await add_item_to_inventory(session, user_id, item_id, qty)
-            if not ok:
-                # Если add_item_to_inventory проверяет лимит — добавляем напрямую
-                inv_r = await session.execute(
-                    select(__import__('models').Inventory).where(
-                        __import__('models').Inventory.user_id == user_id,
-                        __import__('models').Inventory.item_id == item_id))
-                inv = inv_r.scalar_one_or_none()
-                if inv:
-                    inv.quantity += qty
-                else:
+            user_r = await session.execute(select(User).where(User.tg_id == user_id))
+            user = user_r.scalar_one_or_none()
+            if not user:
+                await call.answer("❌ Пользователь не найден!", show_alert=True)
+                return
+
+            activation_msg = None
+            if _is_activatable(item.name):
+                # Активируемые предметы — не в inventory, а сразу активация
+                activation_msg = await _admin_handle_activation(session, user, item, qty)
+            else:
+                # Обычные предметы — в inventory
+                ok, msg = await add_item_to_inventory(session, user_id, item_id, qty)
+                if not ok:
+                    # Если add_item_to_inventory проверяет лимит — добавляем напрямую
                     from models import Inventory
-                    new_inv = Inventory(user_id=user_id, item_id=item_id, quantity=qty)
-                    session.add(new_inv)
+                    inv_r = await session.execute(
+                        select(Inventory).where(
+                            Inventory.user_id == user_id,
+                            Inventory.item_id == item_id))
+                    inv = inv_r.scalar_one_or_none()
+                    if inv:
+                        inv.quantity += qty
+                    else:
+                        new_inv = Inventory(user_id=user_id, item_id=item_id, quantity=qty)
+                        session.add(new_inv)
 
             await session.commit()
 
+            extra = f"\n{activation_msg}" if activation_msg else ""
             btns = [
                 [InlineKeyboardButton(
                     text=f"🔄 Ещё {item.name}",
@@ -199,7 +243,7 @@ async def ashop_buy(call: CallbackQuery) -> None:
                 await call.message.edit_text(
                     f"✅ <b>Получено!</b>\n\n"
                     f"{item.emoji} <b>{item.name}</b> × {qty}\n"
-                    f"💰 Бесплатно (админ)\n\n"
+                    f"💰 Бесплатно (админ){extra}\n\n"
                     f"<i>🔧 Админ-магазин</i>",
                     parse_mode="HTML",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
@@ -281,26 +325,37 @@ async def ashop_custom_quantity(message: Message) -> None:
                 await message.answer("❌ Предмет не найден!")
                 return
 
-            ok, msg = await add_item_to_inventory(session, user_id, item_id, qty)
-            if not ok:
-                from models import Inventory
-                inv_r = await session.execute(
-                    select(Inventory).where(
-                        Inventory.user_id == user_id,
-                        Inventory.item_id == item_id))
-                inv = inv_r.scalar_one_or_none()
-                if inv:
-                    inv.quantity += qty
-                else:
-                    new_inv = Inventory(user_id=user_id, item_id=item_id, quantity=qty)
-                    session.add(new_inv)
+            user_r = await session.execute(select(User).where(User.tg_id == user_id))
+            user = user_r.scalar_one_or_none()
+            if not user:
+                await message.answer("❌ Пользователь не найден!")
+                return
+
+            activation_msg = None
+            if _is_activatable(item.name):
+                activation_msg = await _admin_handle_activation(session, user, item, qty)
+            else:
+                ok, msg = await add_item_to_inventory(session, user_id, item_id, qty)
+                if not ok:
+                    from models import Inventory
+                    inv_r = await session.execute(
+                        select(Inventory).where(
+                            Inventory.user_id == user_id,
+                            Inventory.item_id == item_id))
+                    inv = inv_r.scalar_one_or_none()
+                    if inv:
+                        inv.quantity += qty
+                    else:
+                        new_inv = Inventory(user_id=user_id, item_id=item_id, quantity=qty)
+                        session.add(new_inv)
 
             await session.commit()
 
+            extra = f"\n{activation_msg}" if activation_msg else ""
             await message.answer(
                 f"✅ <b>Получено!</b>\n\n"
                 f"{item.emoji} <b>{item.name}</b> × {qty}\n"
-                f"💰 Бесплатно (админ)\n\n"
+                f"💰 Бесплатно (админ){extra}\n\n"
                 f"/ashop — вернуться в магазин",
                 parse_mode="HTML")
 
