@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from database import get_db
 from models import User, Inventory, Item, GroupChat, MAX_BOX_COUNT, BOX_REFILL_HOURS, MAX_DAILY_BETS
@@ -27,6 +27,8 @@ TOOL_NAMES = {
     "Журнал для взрослых", "Резиновая кукла", "Путана",
     "Durov's Figure", "Заряд теребления",
 }
+
+PHANTOM_SAFE_NAMES = {"Ржавый Сейф", "Элитный Сейф"}
 
 STARTER_ITEMS = ["Адвокат", "Стетоскоп", "Отмычка"]
 
@@ -142,6 +144,9 @@ async def build_inventory_text(user_id: int, session) -> str:
     genes = []
     for inv in inv_items:
         item = inv.item
+        # Пропускаем фантомные сейфы (они должны быть в полях User, не в inventory)
+        if item.name in PHANTOM_SAFE_NAMES:
+            continue
         line = f"{format_emoji(str(item.emoji))} <b>{item.name}</b> — {inv.quantity} шт."
         if item.drop_chance > 0:
             price_tag = f" (💰 {item.price:,} 🪙/шт)" if item.price > 0 else ""
@@ -352,6 +357,14 @@ async def _handle_inventory_dm(message: Message) -> None:
     db = get_db()
     async for session in db.get_session():
         try:
+            # Чистим фантомные сейфы из inventory через JOIN на уровне БД
+            phantom_subq = select(Item.id).where(Item.name.in_(PHANTOM_SAFE_NAMES))
+            await session.execute(
+                delete(Inventory).where(
+                    Inventory.user_id == user_id,
+                    Inventory.item_id.in_(phantom_subq)))
+            await session.flush()
+
             text = await build_inventory_text(user_id, session)
             inv_r = await session.execute(select(Inventory).where(Inventory.user_id == user_id))
             inv_items = inv_r.scalars().all()
