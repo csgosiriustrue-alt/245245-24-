@@ -37,6 +37,28 @@ ROOF_COUNTER_CHANCE = 0.15
 SAFE_LOOT_COIN_PERCENT = 0.25
 CROWBAR_SUCCESS_CHANCE = 0.70
 
+
+def _calc_safe_loot_percent(attacker, victim) -> float:
+    """Динамический расчёт процента добычи из сейфа."""
+    attacker_total = attacker.balance_vv + (attacker.hidden_coins or 0)
+    victim_total = victim.balance_vv + (victim.hidden_coins or 0)
+
+    max_loot = 0.25  # Базовый макс. процент (25%)
+    threshold = attacker_total * 0.6  # Порог паритета
+
+    if threshold <= 0:
+        return 0.01  # Минимум 1% если у атакующего нет денег
+
+    if victim_total >= threshold:
+        loot_percent = max_loot
+    else:
+        loot_percent = max_loot * (victim_total / threshold)
+
+    # Ограничиваем снизу минимумом 1%
+    loot_percent = max(0.01, loot_percent)
+
+    return loot_percent
+
 HEIST_PERCENT_OPTIONS = [10, 20, 30]
 
 GENE_STEAL_CHANCE = 60.0
@@ -1385,6 +1407,8 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
     db = get_db()
     async for session in db.get_session():
         try:
+            rr = await session.execute(select(User).where(User.tg_id == rid))
+            robber = rr.scalar_one_or_none()
             vr = await session.execute(select(User).where(User.tg_id == vid))
             victim = vr.scalar_one_or_none()
             if not victim or not victim.has_active_safe():
@@ -1399,6 +1423,8 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
             else:
                 durability_line = f"❤️ Прочность: <b>{victim.safe_health}/3</b> | ⭐ ур.{level}"
 
+            loot_percent = _calc_safe_loot_percent(robber, victim) if robber else SAFE_LOOT_COIN_PERCENT
+
             ht = ""
             if victim.hidden_item_ids:
                 for hid in victim.hidden_item_ids:
@@ -1407,7 +1433,7 @@ async def rob_safe_recon(call: CallbackQuery) -> None:
                     if io:
                         ht += f"  • 🧬 {io.name} ({io.price:,} 🪙)\n"
             if victim.hidden_coins and victim.hidden_coins > 0:
-                ht += f"  • 💰 {victim.hidden_coins:,} 🪙 (заберёте 25%)\n"
+                ht += f"  • 💰 {victim.hidden_coins:,} 🪙 (заберёте {loot_percent * 100:.0f}%)\n"
             if not ht:
                 ht = "  <i>Пуст</i>"
             btns = [[InlineKeyboardButton(text="🔓 Взломать код", callback_data=f"rob_safe_{rid}_{vid}")]]
@@ -1480,7 +1506,8 @@ async def rob_crowbar(call: CallbackQuery) -> None:
 
                 if success:
                     _failed_crowbar_attempts = 0
-                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
+                    loot_percent = _calc_safe_loot_percent(robber, victim)
+                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim, loot_percent=loot_percent)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
@@ -1550,6 +1577,8 @@ async def rob_safe_start(call: CallbackQuery) -> None:
     async for session in db.get_session():
         try:
             await _track_both(session, call, rid, vid)
+            rr = await session.execute(select(User).where(User.tg_id == rid))
+            robber = rr.scalar_one_or_none()
             vr = await session.execute(select(User).where(User.tg_id == vid))
             victim = vr.scalar_one_or_none()
             if not victim or not victim.has_active_safe():
@@ -1567,6 +1596,8 @@ async def rob_safe_start(call: CallbackQuery) -> None:
                 if inv.item.name == ITEM_LOCKPICK and inv.quantity > 0
             )
 
+            loot_percent = _calc_safe_loot_percent(robber, victim) if robber else SAFE_LOOT_COIN_PERCENT
+
             v_name = _display_name(victim)
             _robbery_sessions[iid] = {
                 "robber_id": rid,
@@ -1580,6 +1611,7 @@ async def rob_safe_start(call: CallbackQuery) -> None:
                 "attempts_left": SAFE_MAX_ATTEMPTS,
                 "max_attempts": SAFE_MAX_ATTEMPTS,
                 "lockpicks_available": lockpick_count,
+                "loot_percent": loot_percent,
             }
 
             masked = _mask_code(code, revealed)
@@ -1588,6 +1620,7 @@ async def rob_safe_start(call: CallbackQuery) -> None:
                 tt += f"🗝 Отмычек: <b>{lockpick_count}</b>\n"
             tt += f"🔓 Угадай цифру (позиция {hidden_pos + 1})\n"
             tt += f"⚠️ Провал = тюрьма {JAIL_SAFE_FAIL_MINUTES}мин\n"
+            tt += f"📈 <i>Ожидаемая добыча: ~{loot_percent * 100:.0f}%</i>\n"
             await _safe_edit_text(
                 call.bot, inline_message_id=iid,
                 text=(f"🔓 <b>Взлом {v_name}</b>\n\n"
@@ -1695,15 +1728,20 @@ async def safe_submit(call: CallbackQuery) -> None:
                     return
 
                 if guess == code:
-                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim)
+                    loot_percent = sess.get("loot_percent") if sess else None
+                    loot, loot_rob, loot_old_level, loot_new_levels = await _loot_safe(session, rid, victim, loot_percent=loot_percent)
                     apply_hazbik_protection(victim)
                     await session.commit()
                     _cleanup_session(iid, rid, vid)
                     if loot_rob and loot_new_levels:
                         await grant_level_rewards(call.bot, session, loot_rob, loot_old_level, loot_new_levels)
+                    lp = sess.get("loot_percent", SAFE_LOOT_COIN_PERCENT) if sess else SAFE_LOOT_COIN_PERCENT
                     await _safe_edit_text(
                         call.bot, inline_message_id=iid,
-                        text=f"🔓 <b>ВСКРЫТ!</b> ✅\n\nКод <code>{code}</code>\n\n{loot}",
+                        text=(f"🔓 <b>Сейф вскрыт!</b> ✅\n\n"
+                              f"Код <code>{code}</code>\n\n"
+                              f"Учитывая ваш статус и обороты цели, вы смогли вынести "
+                              f"<b>{lp * 100:.0f}%</b> содержимого.\n\n{loot}"),
                         parse_mode="HTML")
                     return
 
@@ -1936,7 +1974,7 @@ async def safe_giveup(call: CallbackQuery) -> None:
 # ============================================================================
 
 
-async def _loot_safe(session, robber_id, victim):
+async def _loot_safe(session, robber_id, victim, loot_percent=None):
     lines = []
     rob = None
     old_level = -1  # -1 означает «не инициализировано»
@@ -1954,18 +1992,20 @@ async def _loot_safe(session, robber_id, victim):
         victim.hidden_item_ids = []
 
     if victim.hidden_coins and victim.hidden_coins > 0:
-        stolen = int(victim.hidden_coins * SAFE_LOOT_COIN_PERCENT)
-        returned = victim.hidden_coins - stolen
         rr = await session.execute(select(User).where(User.tg_id == robber_id))
         rob = rr.scalar_one_or_none()
+        if loot_percent is None:
+            loot_percent = _calc_safe_loot_percent(rob, victim) if rob else SAFE_LOOT_COIN_PERCENT
+        stolen = int(victim.hidden_coins * loot_percent)
+        returned = victim.hidden_coins - stolen
         if rob and stolen > 0:
             rob.balance_vv += stolen
             old_level = rob.level
             new_levels = add_xp(rob, stolen)
-            lines.append(f"💰 {stolen:,}🪙 (25%)")
+            lines.append(f"💰 {stolen:,}🪙 ({loot_percent * 100:.0f}%)")
         if returned > 0:
             victim.balance_vv += returned
-            lines.append(f"↩️ {returned:,}🪙 возвращено владельцу (75%)")
+            lines.append(f"↩️ {returned:,}🪙 возвращено владельцу ({(1 - loot_percent) * 100:.0f}%)")
         victim.hidden_coins = 0
 
     destroy_safe(victim)
