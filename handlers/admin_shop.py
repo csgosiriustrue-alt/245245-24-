@@ -20,11 +20,12 @@ ADMIN_IDS: set[int] = {
 SAFE_ITEM_NAMES = {"Ржавый Сейф", "Элитный Сейф"}
 BOOST_ITEM_NAMES = {"Журнал для взрослых", "Резиновая кукла", "Путана"}
 CHARGE_ITEM_NAME = "Заряд теребления"
+SECURITY_ITEM_NAMES = {"Охрана", "Крыша"}
 
 
 def _is_activatable(item_name: str) -> bool:
     return (item_name in SAFE_ITEM_NAMES or item_name in BOOST_ITEM_NAMES
-            or item_name in {"Охрана", "Крыша"} or item_name == CHARGE_ITEM_NAME)
+            or item_name in SECURITY_ITEM_NAMES or item_name == CHARGE_ITEM_NAME)
 
 
 async def _admin_handle_activation(session, user, item, qty=1):

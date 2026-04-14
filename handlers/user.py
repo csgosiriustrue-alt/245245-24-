@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from database import get_db
 from models import User, Inventory, Item, GroupChat, MAX_BOX_COUNT, BOX_REFILL_HOURS, MAX_DAILY_BETS
@@ -357,12 +357,12 @@ async def _handle_inventory_dm(message: Message) -> None:
     db = get_db()
     async for session in db.get_session():
         try:
-            # Чистим фантомные сейфы из inventory
-            inv_r_clean = await session.execute(select(Inventory).where(Inventory.user_id == user_id))
-            for inv in inv_r_clean.scalars().all():
-                if inv.item.name in PHANTOM_SAFE_NAMES:
-                    await session.delete(inv)
-                    logger.info(f"🧹 Фантомный сейф '{inv.item.name}' удалён: user={user_id}")
+            # Чистим фантомные сейфы из inventory через JOIN на уровне БД
+            phantom_subq = select(Item.id).where(Item.name.in_(PHANTOM_SAFE_NAMES))
+            await session.execute(
+                delete(Inventory).where(
+                    Inventory.user_id == user_id,
+                    Inventory.item_id.in_(phantom_subq)))
             await session.flush()
 
             text = await build_inventory_text(user_id, session)
