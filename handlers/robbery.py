@@ -1939,7 +1939,7 @@ async def safe_giveup(call: CallbackQuery) -> None:
 async def _loot_safe(session, robber_id, victim):
     lines = []
     rob = None
-    old_level = 0
+    old_level = -1  # -1 означает «не инициализировано»
     new_levels: list[int] = []
 
     if victim.hidden_item_ids:
